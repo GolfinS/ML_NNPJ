@@ -1,99 +1,116 @@
 import pandas as pd
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import os
-import pickle
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler
+import os
+import tensorflow as tf
 
-# --- ✅ โหลดข้อมูล ---
-file_path = "data/cybersecurity_attacks.csv"
-df = pd.read_csv(file_path)
+# อ่านข้อมูล
+df = pd.read_csv('data/google_data_2020_2025.csv', skiprows=[1, 2])  # ข้ามแถว Ticker และ Date ที่ว่าง
+df['Date'] = pd.to_datetime(df.index)
 
-# --- ✅ Data Processing ---
-# ลบแถวที่มีค่า NaN มากเกินไป
-threshold = 0.5 * len(df.columns)  # ถ้ามีค่าว่างมากกว่า 50% ของคอลัมน์ทั้งหมด ให้ลบออก
-df = df.dropna(thresh=threshold)
+# สร้าง features เพิ่มเติม
+def create_features(df):
+    df['Returns'] = df['Close'].pct_change()
+    df['MA5'] = df['Close'].rolling(window=5).mean()
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+    df['Volatility'] = df['Close'].rolling(window=20).std()
+    df['High_Low_Spread'] = df['High'] - df['Low']
+    df['Open_Close_Spread'] = df['Close'] - df['Open']
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Previous_Close'] = df['Close'].shift(1)
+    df['MA5_Cross'] = (df['Close'] > df['MA5']).astype(int)
+    df['MA20_Cross'] = (df['Close'] > df['MA20']).astype(int)
+    df['MA50_Cross'] = (df['Close'] > df['MA50']).astype(int)
+    df['DayOfWeek'] = df['Date'].dt.dayofweek
+    df['Month'] = df['Date'].dt.month
+    df['IsWeekend'] = df['DayOfWeek'].isin([5, 6]).astype(int)
+    return df
 
-# เติมค่าที่หายไปด้วยค่ากลาง (median) หรือค่าที่พบบ่อยที่สุด (mode)
-for col in df.columns:
-    if df[col].dtype == 'object':
-        df[col].fillna(df[col].mode()[0], inplace=True)  # เติมค่าที่พบบ่อยที่สุด
-    else:
-        df[col].fillna(df[col].median(), inplace=True)  # เติมค่ามัธยฐาน
+# สร้าง target
+def create_target(df):
+    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+    return df
 
-# --- ✅ ตรวจสอบว่ามีคอลัมน์ datetime หรือไม่ และแปลงเป็นตัวเลข ---
-if "Timestamp" in df.columns:
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce').astype(int) / 10**9
+df = create_features(df)
+df = create_target(df)
+df = df.dropna()
 
-# --- ✅ ตรวจสอบว่ามีคอลัมน์ข้อความหรือไม่ และแปลงเป็นตัวเลข ---
-categorical_cols = df.select_dtypes(include=['object']).columns
-if len(categorical_cols) > 0:
-    for col in categorical_cols:
-        df[col], _ = pd.factorize(df[col])
+features = ['Open', 'High', 'Low', 'Close', 'Volume', 'Returns', 'MA5', 'MA20', 'MA50', 'Volatility',
+            'High_Low_Spread', 'Open_Close_Spread', 'Daily_Return', 'Previous_Close',
+            'MA5_Cross', 'MA20_Cross', 'MA50_Cross', 'DayOfWeek', 'Month', 'IsWeekend']
+X = df[features]
+y = df['Target']
 
-# --- ✅ แยก Features และ Target ---
-features = df.drop(columns=["Attack Type"])
-target = df["Attack Type"]
-
-# --- ✅ แปลง Target เป็นตัวเลข ---
-label_encoder = LabelEncoder()
-target = label_encoder.fit_transform(target)
-
-# --- ✅ แบ่งข้อมูล Train/Test ---
-X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
-
-# --- ✅ ทำ Feature Scaling ---
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-# --- ✅ แปลงข้อมูลเป็น Tensor ---
-X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
-X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train, dtype=torch.long)
-y_test_tensor = torch.tensor(y_test, dtype=torch.long)
+def create_sequences(X, y, time_steps=20):
+    Xs, ys = [], []
+    for i in range(len(X) - time_steps):
+        Xs.append(X[i:(i + time_steps)])
+        ys.append(y.iloc[i + time_steps])
+    return np.array(Xs), np.array(ys)
 
-# --- ✅ สร้างโมเดล Neural Network ---
-class FCNN(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super(FCNN, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, num_classes)
-        self.relu = nn.ReLU()
-    
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+time_steps = 20
+X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train, time_steps)
+X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test, time_steps)
 
-# --- ✅ กำหนดค่าโมเดล ---
-input_dim = X_train.shape[1]
-num_classes = len(np.unique(target))
-model = FCNN(input_dim, num_classes)
+# สร้างโมเดล Neural Network
+model = tf.keras.Sequential([
+    tf.keras.layers.LSTM(128, return_sequences=True, input_shape=(time_steps, X_train_seq.shape[2])),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.LSTM(64, return_sequences=True),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.LSTM(32),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dropout(0.2),
+    tf.keras.layers.Dense(16, activation='relu'),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dropout(0.2),
+    tf.keras.layers.Dense(1, activation='sigmoid')
+])
 
-# --- ✅ Loss Function และ Optimizer ---
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    loss='binary_crossentropy',
+    metrics=['accuracy', tf.keras.metrics.AUC()]
+)
 
-# --- ✅ เทรนโมเดล ---
-n_epochs = 50
-for epoch in range(n_epochs):
-    optimizer.zero_grad()
-    outputs = model(X_train_tensor)
-    loss = criterion(outputs, y_train_tensor)
-    loss.backward()
-    optimizer.step()
-    if (epoch+1) % 10 == 0:
-        print(f"Epoch [{epoch+1}/{n_epochs}], Loss: {loss.item():.4f}")
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
 
-# --- ✅ บันทึกโมเดล ---
-os.makedirs("models", exist_ok=True)
-torch.save(model.state_dict(), "models/cyber_nn.pth")
-pickle.dump(scaler, open("models/scaler_nn.pkl", "wb"))
-pickle.dump(label_encoder, open("models/label_encoder.pkl", "wb"))
-print("🎯 โมเดล Neural Network ถูกบันทึกสำเร็จ!")
+history = model.fit(
+    X_train_seq, y_train_seq, epochs=150, batch_size=32, validation_split=0.2,
+    callbacks=[early_stopping, reduce_lr], verbose=1
+)
+
+test_loss, test_accuracy, test_auc = model.evaluate(X_test_seq, y_test_seq)
+print(f"\nTest Accuracy: {test_accuracy:.4f}")
+print(f"Test AUC: {test_auc:.4f}")
+
+y_pred = (model.predict(X_test_seq) > 0.5).astype(int)
+
+from sklearn.metrics import classification_report, confusion_matrix
+print("\nClassification Report:")
+print(classification_report(y_test_seq, y_pred))
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test_seq, y_pred))
+
+if not os.path.exists('models'):
+    os.makedirs('models')
+
+model.save('models/lstm_stock_model.h5')
+import pickle
+with open('models/scaler.pkl', 'wb') as f:
+    pickle.dump(scaler, f)
+
+print("\nบันทึกโมเดลเรียบร้อยแล้ว")

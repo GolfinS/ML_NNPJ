@@ -10,7 +10,7 @@ from sklearn.model_selection import GridSearchCV
 import os
 
 # Load data
-df = pd.read_csv('../data/olympics_1896-2024.csv')
+df = pd.read_csv('data/olympics_1896-2024.csv')
 
 # แปลง Rank เป็นตัวเลข
 df['Rank'] = pd.to_numeric(df['Rank'], errors='coerce')
