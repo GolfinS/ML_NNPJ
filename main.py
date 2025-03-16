@@ -1,4 +1,9 @@
 import streamlit as st
+import sys
+import os
+
+# เพิ่ม src เข้าไปใน path
+sys.path.append(os.path.abspath("src"))
 
 # สร้าง Sidebar Navigation
 st.sidebar.title("เมนูหลัก")
@@ -8,20 +13,15 @@ page = st.sidebar.radio("เลือกหน้า:", ["หน้าแรก"
 if page == "หน้าแรก":
     st.title("Welcome to the AI Web App")
     st.write("เลือกเมนูทางด้านซ้ายเพื่อเริ่มต้นใช้งาน")
-    st.image("https://source.unsplash.com/800x400/?technology,ai", use_container_width=True)
 
 # อธิบาย Machine Learning
 elif page == "ข้อมูล Machine Learning":
-    import app_info_ml
+    from src import app_info_ml
 
 # อธิบาย Neural Network
 elif page == "ข้อมูล Neural Network":
-    import app_info_nn
+    from src import app_info_nn
 
 # Demo Machine Learning
 elif page == "คำนวณ ML":
-    import app_ml
-
-# Demo Neural Network
-elif page == "คำนวณ NN":
-    import app_nn
+    from . import app_demo

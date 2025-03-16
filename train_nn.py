@@ -4,35 +4,57 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import os
-
+import pickle
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 # --- ✅ โหลดข้อมูล ---
-file_path = "processed_data/cybersecurity_cleaned.csv"
+file_path = "data/cybersecurity_attacks.csv"
 df = pd.read_csv(file_path)
+
+# --- ✅ Data Processing ---
+# ลบแถวที่มีค่า NaN มากเกินไป
+threshold = 0.5 * len(df.columns)  # ถ้ามีค่าว่างมากกว่า 50% ของคอลัมน์ทั้งหมด ให้ลบออก
+df = df.dropna(thresh=threshold)
+
+# เติมค่าที่หายไปด้วยค่ากลาง (median) หรือค่าที่พบบ่อยที่สุด (mode)
+for col in df.columns:
+    if df[col].dtype == 'object':
+        df[col].fillna(df[col].mode()[0], inplace=True)  # เติมค่าที่พบบ่อยที่สุด
+    else:
+        df[col].fillna(df[col].median(), inplace=True)  # เติมค่ามัธยฐาน
 
 # --- ✅ ตรวจสอบว่ามีคอลัมน์ datetime หรือไม่ และแปลงเป็นตัวเลข ---
 if "Timestamp" in df.columns:
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce').astype(int) / 10**9  # แปลงเป็น Unix Timestamp
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce').astype(int) / 10**9
+
+# --- ✅ ตรวจสอบว่ามีคอลัมน์ข้อความหรือไม่ และแปลงเป็นตัวเลข ---
+categorical_cols = df.select_dtypes(include=['object']).columns
+if len(categorical_cols) > 0:
+    for col in categorical_cols:
+        df[col], _ = pd.factorize(df[col])
 
 # --- ✅ แยก Features และ Target ---
-features = df.drop(columns=["Attack Type"])  # ลบคอลัมน์เป้าหมาย
+features = df.drop(columns=["Attack Type"])
 target = df["Attack Type"]
+
+# --- ✅ แปลง Target เป็นตัวเลข ---
+label_encoder = LabelEncoder()
+target = label_encoder.fit_transform(target)
 
 # --- ✅ แบ่งข้อมูล Train/Test ---
 X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
 
 # --- ✅ ทำ Feature Scaling ---
 scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
 # --- ✅ แปลงข้อมูลเป็น Tensor ---
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)
-y_test_tensor = torch.tensor(y_test.values, dtype=torch.long)
+X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
+X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train, dtype=torch.long)
+y_test_tensor = torch.tensor(y_test, dtype=torch.long)
 
 # --- ✅ สร้างโมเดล Neural Network ---
 class FCNN(nn.Module):
@@ -72,4 +94,6 @@ for epoch in range(n_epochs):
 # --- ✅ บันทึกโมเดล ---
 os.makedirs("models", exist_ok=True)
 torch.save(model.state_dict(), "models/cyber_nn.pth")
+pickle.dump(scaler, open("models/scaler_nn.pkl", "wb"))
+pickle.dump(label_encoder, open("models/label_encoder.pkl", "wb"))
 print("🎯 โมเดล Neural Network ถูกบันทึกสำเร็จ!")
